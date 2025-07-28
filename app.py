@@ -25,7 +25,7 @@ st.warning("⚠️ **Important :** Ce service utilise OpenCage Geocoding API. Il
 # C'EST ICI QUE NOUS UTILISONS TA CLÉ API
 # Pour le test et le code, la clé est ici. Pour le déploiement sur Streamlit Cloud,
 # nous utiliserons une méthode plus sécurisée (voir instructions après le code).
-API_KEY = "8c75fec26927411a971bba3691523907" # Ta clé API OpenCage
+API_KEY = st.secrets["OPENCAGE_API_KEY"]
 geocoder = OpenCageGeocode(API_KEY)
 
 # --- Fonction de vérification des coordonnées (adaptée pour OpenCage) ---
