@@ -1,66 +1,64 @@
 import streamlit as st
 import pandas as pd
-from geopy.geocoders import Nominatim
-from geopy.extra.rate_limiter import RateLimiter
+# Importation de OpenCageGeocode à la place de Nominatim
+from opencage.geocoder import OpenCageGeocode
+# Plus besoin de RateLimiter avec un service qui gère mieux les requêtes
+# from geopy.extra.rate_limiter import RateLimiter 
 import time
 
 # --- Configuration de l'application Streamlit ---
 st.set_page_config(
-    page_title="Vérificateur de Correspondance Coordonnées-Commune",
-    page_icon="🗺️",
+    page_title="Vérificateur de Correspondance Coordonnées-Commune (Rapide)",
+    page_icon="⚡",
     layout="wide"
 )
 
-st.title("🗺️ Vérificateur de Correspondance Coordonnées-Commune")
+st.title("⚡ Vérificateur de Correspondance Coordonnées-Commune (Rapide)")
 st.markdown("""
 Cette application vous permet de vérifier la correspondance entre les coordonnées géographiques (latitude, longitude)
-et la commune associée dans votre fichier CSV.
+et la commune associée dans votre fichier CSV, **avec une vitesse améliorée grâce à OpenCage Geocoding API**.
 """)
 
-st.warning("⚠️ **Important :** Ce service utilise Nominatim d'OpenStreetMap. Il y a des limites d'utilisation (environ 1 requête par seconde). Pour de très gros fichiers, cela peut prendre du temps ou rencontrer des problèmes de dépassement de limite. Pour une utilisation plus intensive, des services de géocodage payants seraient plus adaptés.")
+st.warning("⚠️ **Important :** Ce service utilise OpenCage Geocoding API. Il offre des performances bien supérieures à Nominatim, mais n'oubliez pas que les plans gratuits ont des limites de requêtes (généralement 2500 requêtes par jour). Au-delà, le service peut devenir payant ou bloqué jusqu'au jour suivant.")
 
-# --- Initialisation du géocodeur Nominatim ---
-# Il est crucial de définir un 'user_agent' unique pour votre application.
-# Remplacez "mon_app_de_verification_coordonnees" par un nom qui identifie votre application.
-geolocator = Nominatim(user_agent="mon_app_de_verification_coordonnees_par_code_partenaire")
+# --- Initialisation du géocodeur OpenCage ---
+# C'EST ICI QUE NOUS UTILISONS TA CLÉ API
+# Pour le test et le code, la clé est ici. Pour le déploiement sur Streamlit Cloud,
+# nous utiliserons une méthode plus sécurisée (voir instructions après le code).
+API_KEY = "8c75fec26927411a971bba3691523907" # Ta clé API OpenCage
+geocoder = OpenCageGeocode(API_KEY)
 
-# Utilisation de RateLimiter pour respecter les limites de requêtes de Nominatim
-# Cela assure qu'il y a un délai minimum entre les requêtes (ici, 1 seconde).
-geocode = RateLimiter(geolocator.reverse, min_delay_seconds=1)
-
-# --- Fonction de vérification des coordonnées ---
+# --- Fonction de vérification des coordonnées (adaptée pour OpenCage) ---
 @st.cache_data
-def verify_coordinates(latitude, longitude, expected_commune):
+def verify_coordinates_opencage(latitude, longitude, expected_commune):
     """
-    Vérifie si les coordonnées correspondent à la commune attendue.
+    Vérifie si les coordonnées correspondent à la commune attendue en utilisant OpenCage.
     Retourne un tuple (correspondance_ok, commune_trouvee, message_erreur).
     """
     try:
-        # Tente de géocoder les coordonnées
-        location = geocode(f"{latitude}, {longitude}")
+        # Tente de géocoder les coordonnées avec OpenCage.
+        # reverse_geocode est la méthode pour OpenCage
+        results = geocoder.reverse_geocode(latitude, longitude, language='fr') # Préciser la langue pour de meilleurs résultats français
 
-        if location:
-            # Récupère les informations d'adresse brutes
-            address = location.raw.get('address', {})
-
-            # Essaye de trouver la ville/commune dans différents champs
-            # Ajout de 'county' et 'suburb' pour plus de robustesse, car la 'commune' peut varier.
-            found_commune = address.get('city') or \
-                            address.get('town') or \
-                            address.get('village') or \
-                            address.get('municipality') or \
-                            address.get('county') or \
-                            address.get('suburb') # Ajout de suburb
+        if results and len(results) > 0:
+            # OpenCage renvoie des résultats dans un format légèrement différent
+            components = results[0]['components']
+            
+            # Rechercher la commune dans différents champs d'OpenCage
+            # Les noms peuvent varier (city, town, village, municipality, etc.)
+            found_commune = components.get('city') or \
+                            components.get('town') or \
+                            components.get('village') or \
+                            components.get('municipality') or \
+                            components.get('county') or \
+                            components.get('suburb') or \
+                            components.get('hamlet') # Ajout de hamlet pour des lieux très petits
 
             if found_commune:
-                # Normalise les noms pour une meilleure comparaison (minuscules, sans accents, etc.)
-                # Pour une comparaison simple, nous allons juste mettre en minuscules et supprimer les espaces.
-                # Pour une robustesse accrue, une librairie de normalisation de chaînes (comme unidecode ou difflib) pourrait être utilisée.
                 normalized_expected = expected_commune.lower().strip()
                 normalized_found = found_commune.lower().strip()
 
-                # On vérifie si la commune trouvée est contenue dans la commune attendue ou vice-versa,
-                # pour gérer les petites variations de noms (ex: "Paris" vs "Paris Cedex")
+                # Comparaison plus flexible: si l'un est contenu dans l'autre
                 if normalized_expected in normalized_found or normalized_found in normalized_expected:
                     return True, found_commune, None
                 else:
@@ -70,6 +68,9 @@ def verify_coordinates(latitude, longitude, expected_commune):
         else:
             return False, None, "Aucune information de localisation trouvée pour ces coordonnées."
     except Exception as e:
+        # Gérer les erreurs spécifiques d'API comme les limites de requêtes
+        if "rate limit exceeded" in str(e).lower() or "forbidden" in str(e).lower():
+            return False, None, f"Erreur OpenCage : Limite de requêtes API dépassée ou clé invalide. Veuillez vérifier votre clé ou le quota."
         return False, None, f"Erreur lors de la vérification : {e}"
 
 # --- Section de téléchargement de fichier ---
@@ -80,7 +81,7 @@ if uploaded_file is not None:
     st.success("Fichier CSV téléchargé avec succès !")
     # Lecture du fichier CSV
     try:
-        # C'est la ligne corrigée : ajout de delimiter=';'
+        # Utilise le délimiteur point-virgule comme identifié précédemment
         df = pd.read_csv(uploaded_file, delimiter=';')
         st.subheader("Aperçu de votre fichier (les 5 premières lignes) :")
         st.dataframe(df.head())
@@ -89,10 +90,10 @@ if uploaded_file is not None:
         required_columns = ['latitude', 'longitude', 'commune']
         if not all(col in df.columns for col in required_columns):
             st.error(f"Le fichier CSV doit contenir les colonnes suivantes : {', '.join(required_columns)}")
-            st.info("Vérifiez l'orthographe des en-têtes de colonnes ou le séparateur de votre fichier (doit être ';').")
+            st.info("Vérifiez l'orthographe exacte des en-têtes de colonnes (minuscules) ou le séparateur de votre fichier (doit être ';').")
         else:
             st.header("2. Lancement de la vérification")
-            st.info("Traitement en cours... Cela peut prendre un certain temps en fonction de la taille de votre fichier et des limites du service de géocodage.")
+            st.info("Traitement en cours... Préparez-vous à la vitesse ! 🚀")
 
             # Initialisation des listes pour stocker les résultats
             results = []
@@ -105,7 +106,8 @@ if uploaded_file is not None:
                 lon = row['longitude']
                 commune = str(row['commune']) # Assurez-vous que la commune est une chaîne de caractères
 
-                is_match, found_commune, error_message = verify_coordinates(lat, lon, commune)
+                # Utilisation de la nouvelle fonction de vérification OpenCage
+                is_match, found_commune, error_message = verify_coordinates_opencage(lat, lon, commune)
                 
                 results.append({
                     'latitude': lat,
